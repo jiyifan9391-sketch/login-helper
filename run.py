@@ -7,32 +7,17 @@ import sys
 from playwright.async_api import async_playwright
 
 # =================================================================
-# 🔥【核心配置区】在这里提前把所有网站的元素都写好
+# 🔥【唯一规则】只监控这两个元素
+# 只要网页里出现这两个中的任意一个，软件就会去读里面的字
 # =================================================================
-# 格式说明： "网址关键词": "该网站的消息元素代码"
-SITE_RULES = {
-    # 示例1：淘宝后台（假设网址里包含 taobao.com）
-    "taobao.com": ".chat-bubble, .new-message-count", 
-    
-    # 示例2：京东后台（假设网址里包含 jd.com）
-    "jd.com": ".jimi-text, .badge-count",
-
-    # 示例3：微店或自建站（根据实际情况填写）
-    "weidian": ".notice-dot",
-    
-    # 示例4：通用的 Element UI 后台（很多国内后台用这个）
-    "admin": ".el-badge__content",
-}
-
-# 兜底规则：如果上面的网址都没匹配上，就用这一组最通用的
-DEFAULT_SELECTOR = ".lastNewMsg, .visitorMsg, .el-badge__content, .red-dot"
+TARGET_SELECTOR = ".lastNewMsg, .visitorMsg"
 # =================================================================
 
 class AutoLoginMonitorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("智能客服助手 (内置规则版)")
-        self.root.geometry("900x650")
+        self.root.title("Edge 客服监控助手 (精简版)")
+        self.root.geometry("800x600")
         
         # 1. 顶部操作区
         self.frame_top = tk.Frame(root, pady=10)
@@ -45,7 +30,7 @@ class AutoLoginMonitorApp:
         self.lbl_file.pack(side='left', padx=5)
 
         # 2. 核心按钮
-        self.btn_start = tk.Button(root, text="🚀 启动 Edge 并自动匹配规则", command=self.start_thread, 
+        self.btn_start = tk.Button(root, text="🚀 启动并开始监控", command=self.start_thread, 
                                    bg="#007AFF", fg="white", font=("Arial", 14, "bold"), height=2)
         self.btn_start.pack(fill='x', padx=20, pady=10)
         
@@ -126,27 +111,12 @@ class AutoLoginMonitorApp:
                     acc = parts[1].strip()
                     pwd = parts[2].strip() if len(parts) > 2 else "NONE"
                     
-                    # === 🔥 智能匹配规则逻辑 ===
-                    matched_selector = DEFAULT_SELECTOR # 先给个默认的
-                    rule_name = "默认通用规则"
-                    
-                    # 遍历你的规则库，看看网址里有没有关键词
-                    for keyword, rule_selector in SITE_RULES.items():
-                        if keyword in url:
-                            matched_selector = rule_selector
-                            rule_name = f"匹配到 [{keyword}]"
-                            break
-                    
-                    # 在日志里告诉你匹配到了什么
-                    self.log(f"[{acc}] 准备登录 | 监控策略: {rule_name}")
-
                     page = await context.new_page()
                     
                     # 记录页面信息
                     pages_info.append({
                         "page": page,
                         "account": acc,
-                        "selector": matched_selector, # 这里存的就是最终决定使用的规则
                         "last_msg": ""
                     })
                     
@@ -155,7 +125,7 @@ class AutoLoginMonitorApp:
             if tasks:
                 await asyncio.gather(*tasks)
                 self.log("\n✅ 登录完成，正在启动监控...")
-                self.log(">>> 🔥 [消息监控模式] 已启动")
+                self.log(f">>> 🔥 监控目标: {TARGET_SELECTOR}")
 
                 # 死循环监控
                 while True:
@@ -164,28 +134,29 @@ class AutoLoginMonitorApp:
                             page = info['page']
                             if page.is_closed(): continue
                             
-                            # 直接使用匹配好的 selector
-                            selector = info['selector']
+                            # 直接找这两个元素
+                            elements = await page.locator(TARGET_SELECTOR).all()
                             
-                            elements = await page.locator(selector).all()
                             if elements:
-                                # 尝试读取文字
+                                # 只读第一个匹配到的（通常是最新的那条）
                                 new_text = await elements[0].text_content()
                                 if new_text:
                                     new_text = new_text.strip()
                                     if new_text and new_text != info['last_msg']:
+                                        # 发现新消息！
                                         self.log(f"🔔 [{info['account']}] 新消息: {new_text}")
                                         info['last_msg'] = new_text
                         except:
                             pass
                     
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(3) # 每3秒检查一次
             
             await asyncio.Future() 
 
     async def smart_login(self, page, url, account, password):
         try:
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+            # self.log(f"[{account}] 打开网页...") 
             try:
                 await page.goto(url, timeout=60000, wait_until='domcontentloaded')
             except:
