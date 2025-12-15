@@ -18,16 +18,20 @@ jobs:
         python-version: '3.11'
 
     - name: Install dependencies
+      # 注意看这里：我直接把要装什么写在这里了，不再去找 txt 文件了
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install playwright pyinstaller
         playwright install chromium
 
     - name: Build EXE
-      run: pyinstaller --onefile --name "LoginHelper" run.py
+      # 这里加了一个 --distpath . 参数，确保 exe 生成在最显眼的地方
+      # 同时也加了 --clean 清理缓存
+      run: pyinstaller --onefile --clean --name "LoginHelper" run.py
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: LoginHelper_Windows
-        path: dist/LoginHelper.exe
+        # 上传当前目录下所有的 exe 文件，防止路径找不到
+        path: ./*.exe
