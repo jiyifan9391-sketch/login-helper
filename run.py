@@ -8,7 +8,7 @@ from playwright.async_api import async_playwright
 
 # ================= 配置区域 =================
 # 消息选择器 (根据你的网页实际情况修改)
-MSG_SELECTOR = ".lastNewMsg"
+UNIVERSAL_SELECTOR = ".lastNewMsg, .visitorMsg, .el-badge__content"
 # ===========================================
 
 class AutoLoginMonitorApp:
