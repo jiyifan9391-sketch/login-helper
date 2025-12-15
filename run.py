@@ -6,16 +6,33 @@ import os
 import sys
 from playwright.async_api import async_playwright
 
-# ================= 配置区域 =================
-# 消息选择器 (根据你的网页实际情况修改)
-UNIVERSAL_SELECTOR = ".lastNewMsg, .visitorMsg, .el-badge__content"
-# ===========================================
+# =================================================================
+# 🔥【核心配置区】在这里提前把所有网站的元素都写好
+# =================================================================
+# 格式说明： "网址关键词": "该网站的消息元素代码"
+SITE_RULES = {
+    # 示例1：淘宝后台（假设网址里包含 taobao.com）
+    "taobao.com": ".chat-bubble, .new-message-count", 
+    
+    # 示例2：京东后台（假设网址里包含 jd.com）
+    "jd.com": ".jimi-text, .badge-count",
+
+    # 示例3：微店或自建站（根据实际情况填写）
+    "weidian": ".notice-dot",
+    
+    # 示例4：通用的 Element UI 后台（很多国内后台用这个）
+    "admin": ".el-badge__content",
+}
+
+# 兜底规则：如果上面的网址都没匹配上，就用这一组最通用的
+DEFAULT_SELECTOR = ".lastNewMsg, .visitorMsg, .el-badge__content, .red-dot"
+# =================================================================
 
 class AutoLoginMonitorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Edge 批量登录 & 消息监控助手")
-        self.root.geometry("800x600")
+        self.root.title("智能客服助手 (内置规则版)")
+        self.root.geometry("900x650")
         
         # 1. 顶部操作区
         self.frame_top = tk.Frame(root, pady=10)
@@ -28,33 +45,28 @@ class AutoLoginMonitorApp:
         self.lbl_file.pack(side='left', padx=5)
 
         # 2. 核心按钮
-        self.btn_start = tk.Button(root, text="🚀 启动 Edge 并开始监控", command=self.start_thread, 
+        self.btn_start = tk.Button(root, text="🚀 启动 Edge 并自动匹配规则", command=self.start_thread, 
                                    bg="#007AFF", fg="white", font=("Arial", 14, "bold"), height=2)
         self.btn_start.pack(fill='x', padx=20, pady=10)
         
-        # 3. 日志/消息显示区
+        # 3. 日志区
         self.log_area = scrolledtext.ScrolledText(root, width=90, height=25, font=("Arial", 11))
         self.log_area.pack(padx=10, pady=10, expand=True, fill='both')
         
         self.file_path = ""
-        
-        # 自动尝试寻找同目录下的 accounts.txt
         self.try_find_default_file()
 
     def log(self, msg):
-        """往界面上打印日志"""
         def _update():
             self.log_area.insert(tk.END, f"{msg}\n")
             self.log_area.see(tk.END)
         self.root.after(0, _update)
 
     def try_find_default_file(self):
-        # 获取当前运行目录
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
-            
         default_file = os.path.join(base_path, "accounts.txt")
         if os.path.exists(default_file):
             self.file_path = default_file
@@ -72,18 +84,15 @@ class AutoLoginMonitorApp:
         if not self.file_path:
             messagebox.showwarning("提示", "请先选择 accounts.txt 文件！")
             return
-        
         self.btn_start.config(state='disabled', text="正在运行中...")
         threading.Thread(target=self.run_async_loop, daemon=True).start()
 
     def run_async_loop(self):
-        """在子线程中运行 asyncio"""
         asyncio.run(self.main_logic())
 
     async def main_logic(self):
         self.log(">>> 正在启动 Edge 浏览器...")
         
-        # 读取账号
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
                 lines = [line.strip() for line in f if line.strip()]
@@ -92,27 +101,22 @@ class AutoLoginMonitorApp:
             return
 
         async with async_playwright() as p:
-            # 1. 启动浏览器
+            # 1. 启动浏览器 (优先 Edge)
             try:
                 browser = await p.chromium.launch(
                     headless=False, 
-                    channel="msedge",  # 强制使用 Edge
+                    channel="msedge", 
                     args=["--start-maximized", "--disable-blink-features=AutomationControlled"]
                 )
-            except Exception:
+            except:
                 self.log("⚠️ 未找到 Edge，尝试使用 Chrome...")
                 browser = await p.chromium.launch(headless=False, channel="chrome", args=["--start-maximized"])
 
-            # 2. 创建上下文 (单窗口)
-            context = await browser.new_context(
-                viewport=None, 
-                ignore_https_errors=True
-            )
+            context = await browser.new_context(viewport=None, ignore_https_errors=True)
 
-            # 3. 批量登录阶段
-            self.log(f">>> 开始批量登录 {len(lines)} 个账号...")
+            self.log(f">>> 开始处理 {len(lines)} 个账号...")
             tasks = []
-            pages_info = [] # 存储页面信息用于后续监控
+            pages_info = [] 
 
             for line in lines:
                 if line.startswith("#"): continue
@@ -122,11 +126,27 @@ class AutoLoginMonitorApp:
                     acc = parts[1].strip()
                     pwd = parts[2].strip() if len(parts) > 2 else "NONE"
                     
+                    # === 🔥 智能匹配规则逻辑 ===
+                    matched_selector = DEFAULT_SELECTOR # 先给个默认的
+                    rule_name = "默认通用规则"
+                    
+                    # 遍历你的规则库，看看网址里有没有关键词
+                    for keyword, rule_selector in SITE_RULES.items():
+                        if keyword in url:
+                            matched_selector = rule_selector
+                            rule_name = f"匹配到 [{keyword}]"
+                            break
+                    
+                    # 在日志里告诉你匹配到了什么
+                    self.log(f"[{acc}] 准备登录 | 监控策略: {rule_name}")
+
                     page = await context.new_page()
+                    
                     # 记录页面信息
                     pages_info.append({
                         "page": page,
                         "account": acc,
+                        "selector": matched_selector, # 这里存的就是最终决定使用的规则
                         "last_msg": ""
                     })
                     
@@ -134,55 +154,46 @@ class AutoLoginMonitorApp:
 
             if tasks:
                 await asyncio.gather(*tasks)
-                self.log("\n✅ 所有账号登录操作已完成！")
-                self.log(">>> 🔥 正在切换进入 [消息监控模式] ...")
-                self.log(f">>> 正在监听 {len(pages_info)} 个标签页的 {MSG_SELECTOR} 元素\n")
+                self.log("\n✅ 登录完成，正在启动监控...")
+                self.log(">>> 🔥 [消息监控模式] 已启动")
 
-                # 4. 进入死循环监控阶段
+                # 死循环监控
                 while True:
                     for info in pages_info:
                         try:
                             page = info['page']
                             if page.is_closed(): continue
                             
-                            # 尝试获取最新消息
-                            # timeout=100 意味着只花0.1秒检查，不卡顿
-                            elements = await page.locator(MSG_SELECTOR).all()
+                            # 直接使用匹配好的 selector
+                            selector = info['selector']
                             
+                            elements = await page.locator(selector).all()
                             if elements:
-                                # 获取文本
+                                # 尝试读取文字
                                 new_text = await elements[0].text_content()
                                 if new_text:
                                     new_text = new_text.strip()
-                                    # 如果有新消息，且跟上次不一样
                                     if new_text and new_text != info['last_msg']:
-                                        current_time = asyncio.get_event_loop().time()
                                         self.log(f"🔔 [{info['account']}] 新消息: {new_text}")
                                         info['last_msg'] = new_text
-                        except Exception as e:
-                            # 页面可能被手动关闭了，忽略错误
+                        except:
                             pass
                     
-                    # 每隔 3 秒轮询一次
                     await asyncio.sleep(3)
             
-            # 保持浏览器不关闭 (逻辑上上面是死循环，这里其实走不到，除非出错)
             await asyncio.Future() 
 
     async def smart_login(self, page, url, account, password):
         try:
-            # 防检测
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-            
-            self.log(f"[{account}] 打开网页...")
             try:
                 await page.goto(url, timeout=60000, wait_until='domcontentloaded')
             except:
-                self.log(f"[{account}] ⚠️ 加载较慢")
+                pass
 
             await page.wait_for_timeout(2000)
 
-            # 填账号
+            # 智能填账号
             try:
                 inputs = await page.locator("input:visible").all()
                 filled = False
@@ -193,16 +204,15 @@ class AutoLoginMonitorApp:
                         filled = True
                         break
                 if not filled and inputs: await inputs[0].fill(account)
-            except:
-                pass
+            except: pass
 
-            # 填密码
+            # 智能填密码
             if password.strip() != "NONE":
                 try:
                     await page.fill("input[type='password']", password)
                 except: pass
 
-            # 点登录
+            # 智能点登录
             try:
                 await page.click("button:has-text('登录'), button:has-text('Login'), input[value='登录']", timeout=3000)
                 self.log(f"[{account}] ✅ 点击登录")
@@ -210,7 +220,7 @@ class AutoLoginMonitorApp:
                 await page.keyboard.press("Enter")
 
         except Exception as e:
-            self.log(f"[{account}] ❌ 出错: {e}")
+            self.log(f"[{account}] ❌ 登录出错: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
