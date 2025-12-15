@@ -1,0 +1,37 @@
+name: Build Windows Exe
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11' # 使用 Python 3.11
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements.txt
+        playwright install chromium
+
+    - name: Build EXE
+      # --onefile: 打包成单文件
+      # --noconsole: 运行时不显示黑框（如果你想要黑框看日志，去掉这个参数）
+      # --name: 软件名字
+      run: pyinstaller --onefile --name "自动登录助手" run.py
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: 自动登录助手_Windows版
+        path: dist/*.exe
