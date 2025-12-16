@@ -6,20 +6,17 @@ import os
 import sys
 from playwright.async_api import async_playwright
 
-# =================================================================
-# 🔥【唯一规则】只监控这两个元素
-# 只要网页里出现这两个中的任意一个，软件就会去读里面的字
-# =================================================================
+# ================= 配置区域 =================
+# 消息选择器
 TARGET_SELECTOR = ".lastNewMsg, .visitorMsg"
-# =================================================================
+# ===========================================
 
 class AutoLoginMonitorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Edge 客服监控助手 (精简版)")
+        self.root.title("Edge 客服助手 (防白屏增强版)")
         self.root.geometry("800x600")
         
-        # 1. 顶部操作区
         self.frame_top = tk.Frame(root, pady=10)
         self.frame_top.pack(fill='x', padx=10)
         
@@ -29,12 +26,10 @@ class AutoLoginMonitorApp:
         self.lbl_file = tk.Label(self.frame_top, text="未选择文件", fg="gray")
         self.lbl_file.pack(side='left', padx=5)
 
-        # 2. 核心按钮
         self.btn_start = tk.Button(root, text="🚀 启动并开始监控", command=self.start_thread, 
                                    bg="#007AFF", fg="white", font=("Arial", 14, "bold"), height=2)
         self.btn_start.pack(fill='x', padx=20, pady=10)
         
-        # 3. 日志区
         self.log_area = scrolledtext.ScrolledText(root, width=90, height=25, font=("Arial", 11))
         self.log_area.pack(padx=10, pady=10, expand=True, fill='both')
         
@@ -86,16 +81,26 @@ class AutoLoginMonitorApp:
             return
 
         async with async_playwright() as p:
-            # 1. 启动浏览器 (优先 Edge)
+            # === 补丁1：增强启动参数 ===
+            # 这些参数能屏蔽更多“我是机器人”的特征
+            launch_args = [
+                "--start-maximized", 
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-infobars",
+                "--exclude-switches=enable-automation"
+            ]
+            
             try:
                 browser = await p.chromium.launch(
                     headless=False, 
                     channel="msedge", 
-                    args=["--start-maximized", "--disable-blink-features=AutomationControlled"]
+                    args=launch_args,
+                    ignore_default_args=["--enable-automation"] # 移除自动化提示条
                 )
             except:
                 self.log("⚠️ 未找到 Edge，尝试使用 Chrome...")
-                browser = await p.chromium.launch(headless=False, channel="chrome", args=["--start-maximized"])
+                browser = await p.chromium.launch(headless=False, channel="chrome", args=launch_args)
 
             context = await browser.new_context(viewport=None, ignore_https_errors=True)
 
@@ -113,7 +118,6 @@ class AutoLoginMonitorApp:
                     
                     page = await context.new_page()
                     
-                    # 记录页面信息
                     pages_info.append({
                         "page": page,
                         "account": acc,
@@ -124,40 +128,36 @@ class AutoLoginMonitorApp:
 
             if tasks:
                 await asyncio.gather(*tasks)
-                self.log("\n✅ 登录完成，正在启动监控...")
+                self.log("\n✅ 登录流程结束，启动监控...")
                 self.log(f">>> 🔥 监控目标: {TARGET_SELECTOR}")
 
-                # 死循环监控
                 while True:
                     for info in pages_info:
                         try:
                             page = info['page']
                             if page.is_closed(): continue
                             
-                            # 直接找这两个元素
                             elements = await page.locator(TARGET_SELECTOR).all()
-                            
                             if elements:
-                                # 只读第一个匹配到的（通常是最新的那条）
                                 new_text = await elements[0].text_content()
                                 if new_text:
                                     new_text = new_text.strip()
                                     if new_text and new_text != info['last_msg']:
-                                        # 发现新消息！
                                         self.log(f"🔔 [{info['account']}] 新消息: {new_text}")
                                         info['last_msg'] = new_text
                         except:
                             pass
-                    
-                    await asyncio.sleep(3) # 每3秒检查一次
+                    await asyncio.sleep(3)
             
             await asyncio.Future() 
 
     async def smart_login(self, page, url, account, password):
         try:
+            # 注入反检测脚本
             await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-            # self.log(f"[{account}] 打开网页...") 
+            
             try:
+                # 等待页面加载，这里不用 networkidle，防止首页加载太久卡住
                 await page.goto(url, timeout=60000, wait_until='domcontentloaded')
             except:
                 pass
@@ -183,15 +183,35 @@ class AutoLoginMonitorApp:
                     await page.fill("input[type='password']", password)
                 except: pass
 
-            # 智能点登录
+            # === 补丁2：模拟真人点击登录（关键修改）===
             try:
-                await page.click("button:has-text('登录'), button:has-text('Login'), input[value='登录']", timeout=3000)
-                self.log(f"[{account}] ✅ 点击登录")
-            except:
-                await page.keyboard.press("Enter")
+                # 寻找按钮
+                btn = page.locator("button:has-text('登录'), button:has-text('Login'), input[value='登录']").first
+                
+                if await btn.count() > 0:
+                    # 1. 鼠标悬停
+                    await btn.hover()
+                    # 2. 稍微犹豫一下（真人特征）
+                    await page.wait_for_timeout(500)
+                    # 3. 点击
+                    await btn.click()
+                    self.log(f"[{account}] ✅ 点击登录 (模拟真人)")
+                    
+                    # === 补丁3：等待跳转后的网络静止 ===
+                    # 点击后，强制等待网络请求变少，确保新页面加载出来了
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                    except:
+                        pass # 如果超时就不等了，反正已经点过了
+                else:
+                    await page.keyboard.press("Enter")
+                    self.log(f"[{account}] ⚠️ 没找到按钮，尝试回车登录")
+
+            except Exception as e:
+                self.log(f"[{account}] 点击出错: {e}")
 
         except Exception as e:
-            self.log(f"[{account}] ❌ 登录出错: {e}")
+            self.log(f"[{account}] ❌ 流程出错: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
