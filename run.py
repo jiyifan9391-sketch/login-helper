@@ -14,7 +14,7 @@ TARGET_SELECTOR = ".lastNewMsg, .visitorMsg"
 class AutoLoginMonitorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Edge 客服助手 (按钮调试版)")
+        self.root.title("Edge 客服助手 (纯净启动版)")
         self.root.geometry("800x600")
         
         self.frame_top = tk.Frame(root, pady=10)
@@ -72,7 +72,7 @@ class AutoLoginMonitorApp:
         asyncio.run(self.main_logic())
 
     async def main_logic(self):
-        self.log(">>> 正在启动 (调试模式)...")
+        self.log(">>> 正在启动 (纯净模式)...")
         
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
@@ -86,10 +86,10 @@ class AutoLoginMonitorApp:
             os.makedirs(user_data_dir)
 
         async with async_playwright() as p:
+            # === 关键修改：移除所有可能触发警告的参数 ===
+            # 只保留这一条最核心的，它通常不会触发警告
             launch_args = [
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--no-first-run",
+                "--disable-blink-features=AutomationControlled" 
             ]
             
             try:
@@ -100,14 +100,15 @@ class AutoLoginMonitorApp:
                     args=launch_args,
                     viewport={"width": 1920, "height": 1080},
                     ignore_https_errors=True,
-                    ignore_default_args=["--enable-automation"]
+                    # 仅屏蔽"正受到自动测试软件控制"这一条提示
+                    ignore_default_args=["--enable-automation"] 
                 )
             except Exception as e:
                 self.log(f"❌ 启动失败: {e}")
-                self.log("💡 请关闭所有 Edge 窗口！")
+                self.log("💡 请务必关闭所有已打开的 Edge 窗口！")
                 return
 
-            # 注入 stealth 补丁
+            # 注入 stealth 补丁 (这个是在内部运行的 JS，不会被浏览器启动参数检测到，很安全)
             await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
             self.log(f">>> 开始处理 {len(lines)} 个账号...")
@@ -125,7 +126,7 @@ class AutoLoginMonitorApp:
                     acc = parts[1].strip()
                     pwd = parts[2].strip() if len(parts) > 2 else "NONE"
                     
-                    # 读取第4列：如果填了，就是自定义的登录按钮
+                    # 读取自定义按钮
                     custom_login_btn = parts[3].strip() if len(parts) > 3 else None
 
                     if not first_page_used:
@@ -175,25 +176,19 @@ class AutoLoginMonitorApp:
 
             await page.wait_for_timeout(random.randint(1500, 2500))
 
-            # === 1. 确定登录按钮是谁 ===
+            # 确定登录按钮
             if custom_btn_selector:
-                # 如果 txt 里指定了，就用指定的
                 login_btn = page.locator(custom_btn_selector).first
-                self.log(f"[{account}] 使用自定义按钮规则: {custom_btn_selector}")
             else:
-                # 否则用默认规则（尝试匹配 登录, Login, 确定 等）
-                # 注意：这里增加了一些常见的非 button 标签的按钮
                 login_btn = page.locator("button:has-text('登录'), button:has-text('Login'), input[value='登录'], a:has-text('登录'), div[role='button']:has-text('登录')").first
             
-            # === 2. 检查是否已登录 ===
-            # 如果找不到登录按钮，且没填密码，可能就是已登录
+            # 检查是否已登录
             if await login_btn.count() == 0 and password == "NONE":
                 self.log(f"[{account}] ✅ 未找到登录按钮，假设已登录")
                 return
 
             self.log(f"[{account}] 正在输入...")
             
-            # 填账号
             try:
                 inputs = await page.locator("input:visible").all()
                 filled = False
@@ -206,35 +201,21 @@ class AutoLoginMonitorApp:
                 if not filled and inputs: await inputs[0].fill(account)
             except: pass
 
-            # 填密码
             if password.strip() != "NONE":
                 try:
                     await page.click("input[type='password']")
                     await page.type("input[type='password']", password, delay=100)
                 except: pass
 
-            # === 3. 关键：高亮并点击 ===
             try:
                 if await login_btn.count() > 0:
-                    # 🔥 高亮显示（画个红框给用户看）
+                    # 高亮并点击
                     await login_btn.highlight()
-                    self.log(f"[{account}] 🔴 已高亮即将点击的按钮，请观察！")
-                    await page.wait_for_timeout(2000) # 停2秒给你看
-
-                    # 点击
-                    # force=True 可以强行点击被遮挡的按钮
+                    await page.wait_for_timeout(1000) 
                     await login_btn.click(force=True)
                     self.log(f"[{account}] ✅ 点击动作已执行")
                     
-                    # 等待页面反应
                     await page.wait_for_timeout(5000)
-                    
-                    # 检查是否弹出了新标签页 (针对某些跳转逻辑)
-                    all_pages = page.context.pages
-                    if len(all_pages) > 1 and all_pages[-1] != page:
-                        self.log(f"[{account}] ⚠️ 检测到新弹窗，自动切换到新页面")
-                        # 如果有新页面，就把 info 里的 page 换成新的
-                        # (这里代码逻辑比较简单，主要为了提示用户)
                 else:
                     self.log(f"[{account}] ⚠️ 找不到登录按钮，尝试回车")
                     await page.keyboard.press("Enter")
