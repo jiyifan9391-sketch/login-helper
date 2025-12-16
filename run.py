@@ -7,20 +7,21 @@ import sys
 from playwright.async_api import async_playwright
 
 # ================= 配置区域 =================
-# 消息选择器
 TARGET_SELECTOR = ".lastNewMsg, .visitorMsg"
+# 伪装身份：这是标准 Windows 10 Edge 的身份证
+FAKE_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
 # ===========================================
 
 class AutoLoginMonitorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Edge 客服助手 (防白屏增强版)")
+        self.root.title("Edge 客服助手 (完美伪装版)")
         self.root.geometry("800x600")
         
         self.frame_top = tk.Frame(root, pady=10)
         self.frame_top.pack(fill='x', padx=10)
         
-        self.btn_select = tk.Button(self.frame_top, text="📂 选择账号文件 (accounts.txt)", command=self.select_file, font=("Arial", 10))
+        self.btn_select = tk.Button(self.frame_top, text="📂 选择账号文件", command=self.select_file, font=("Arial", 10))
         self.btn_select.pack(side='left', padx=5)
 
         self.lbl_file = tk.Label(self.frame_top, text="未选择文件", fg="gray")
@@ -44,10 +45,11 @@ class AutoLoginMonitorApp:
 
     def try_find_default_file(self):
         if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
+            self.base_path = os.path.dirname(sys.executable)
         else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-        default_file = os.path.join(base_path, "accounts.txt")
+            self.base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        default_file = os.path.join(self.base_path, "accounts.txt")
         if os.path.exists(default_file):
             self.file_path = default_file
             self.lbl_file.config(text=default_file, fg="black")
@@ -71,7 +73,7 @@ class AutoLoginMonitorApp:
         asyncio.run(self.main_logic())
 
     async def main_logic(self):
-        self.log(">>> 正在启动 Edge 浏览器...")
+        self.log(">>> 正在启动 Edge (加载伪装身份)...")
         
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
@@ -80,33 +82,46 @@ class AutoLoginMonitorApp:
             self.log(f"❌ 读取文件失败: {e}")
             return
 
+        user_data_dir = os.path.join(self.base_path, "Edge_UserData")
+        if not os.path.exists(user_data_dir):
+            os.makedirs(user_data_dir)
+
         async with async_playwright() as p:
-            # === 补丁1：增强启动参数 ===
-            # 这些参数能屏蔽更多“我是机器人”的特征
             launch_args = [
                 "--start-maximized", 
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-infobars",
-                "--exclude-switches=enable-automation"
+                "--disable-infobars"
             ]
             
             try:
-                browser = await p.chromium.launch(
-                    headless=False, 
+                # === 关键修改：注入 user_agent 和 viewport ===
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
                     channel="msedge", 
+                    headless=False,
                     args=launch_args,
-                    ignore_default_args=["--enable-automation"] # 移除自动化提示条
+                    
+                    # 1. 强制指定身份 (解决卡密不存在问题)
+                    user_agent=FAKE_USER_AGENT,
+                    
+                    # 2. 强制指定分辨率 (防止被识别为移动端)
+                    viewport={"width": 1920, "height": 1080},
+                    
+                    ignore_https_errors=True,
+                    ignore_default_args=["--enable-automation"]
                 )
-            except:
-                self.log("⚠️ 未找到 Edge，尝试使用 Chrome...")
-                browser = await p.chromium.launch(headless=False, channel="chrome", args=launch_args)
-
-            context = await browser.new_context(viewport=None, ignore_https_errors=True)
+            except Exception as e:
+                self.log(f"❌ 启动失败: {e}")
+                self.log("💡 请关闭所有 Edge 窗口后重试！")
+                return
 
             self.log(f">>> 开始处理 {len(lines)} 个账号...")
             tasks = []
             pages_info = [] 
+
+            first_page = context.pages[0] if context.pages else await context.new_page()
+            first_page_used = False
 
             for line in lines:
                 if line.startswith("#"): continue
@@ -116,7 +131,11 @@ class AutoLoginMonitorApp:
                     acc = parts[1].strip()
                     pwd = parts[2].strip() if len(parts) > 2 else "NONE"
                     
-                    page = await context.new_page()
+                    if not first_page_used:
+                        page = first_page
+                        first_page_used = True
+                    else:
+                        page = await context.new_page()
                     
                     pages_info.append({
                         "page": page,
@@ -153,18 +172,28 @@ class AutoLoginMonitorApp:
 
     async def smart_login(self, page, url, account, password):
         try:
-            # 注入反检测脚本
-            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+            # 注入 JS 再次伪装
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                // 伪装 Platform
+                Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+            """)
             
             try:
-                # 等待页面加载，这里不用 networkidle，防止首页加载太久卡住
                 await page.goto(url, timeout=60000, wait_until='domcontentloaded')
             except:
                 pass
 
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(1500)
 
-            # 智能填账号
+            login_btn = page.locator("button:has-text('登录'), button:has-text('Login'), input[value='登录']").first
+            
+            if await login_btn.count() == 0:
+                self.log(f"[{account}] ✅ 检测到已登录")
+                return
+            
+            self.log(f"[{account}] 正在登录...")
+            
             try:
                 inputs = await page.locator("input:visible").all()
                 filled = False
@@ -177,41 +206,23 @@ class AutoLoginMonitorApp:
                 if not filled and inputs: await inputs[0].fill(account)
             except: pass
 
-            # 智能填密码
             if password.strip() != "NONE":
                 try:
                     await page.fill("input[type='password']", password)
                 except: pass
 
-            # === 补丁2：模拟真人点击登录（关键修改）===
+            # 模拟真人点击
             try:
-                # 寻找按钮
-                btn = page.locator("button:has-text('登录'), button:has-text('Login'), input[value='登录']").first
-                
-                if await btn.count() > 0:
-                    # 1. 鼠标悬停
-                    await btn.hover()
-                    # 2. 稍微犹豫一下（真人特征）
-                    await page.wait_for_timeout(500)
-                    # 3. 点击
-                    await btn.click()
-                    self.log(f"[{account}] ✅ 点击登录 (模拟真人)")
-                    
-                    # === 补丁3：等待跳转后的网络静止 ===
-                    # 点击后，强制等待网络请求变少，确保新页面加载出来了
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=10000)
-                    except:
-                        pass # 如果超时就不等了，反正已经点过了
-                else:
-                    await page.keyboard.press("Enter")
-                    self.log(f"[{account}] ⚠️ 没找到按钮，尝试回车登录")
-
+                await login_btn.hover()
+                await page.wait_for_timeout(800)
+                await login_btn.click()
+                self.log(f"[{account}] ✅ 点击登录")
+                await page.wait_for_timeout(3000)
             except Exception as e:
-                self.log(f"[{account}] 点击出错: {e}")
+                await page.keyboard.press("Enter")
 
         except Exception as e:
-            self.log(f"[{account}] ❌ 流程出错: {e}")
+            self.log(f"[{account}] 流程提示: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
