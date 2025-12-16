@@ -14,7 +14,7 @@ TARGET_SELECTOR = ".lastNewMsg, .visitorMsg"
 class AutoLoginMonitorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Edge 客服助手 (纯净启动版)")
+        self.root.title("Edge 客服助手 (无沙箱警告版)")
         self.root.geometry("800x600")
         
         self.frame_top = tk.Frame(root, pady=10)
@@ -72,7 +72,7 @@ class AutoLoginMonitorApp:
         asyncio.run(self.main_logic())
 
     async def main_logic(self):
-        self.log(">>> 正在启动 (纯净模式)...")
+        self.log(">>> 正在启动 (强力净化版)...")
         
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
@@ -86,10 +86,10 @@ class AutoLoginMonitorApp:
             os.makedirs(user_data_dir)
 
         async with async_playwright() as p:
-            # === 关键修改：移除所有可能触发警告的参数 ===
-            # 只保留这一条最核心的，它通常不会触发警告
+            # === 参数净化 ===
+            # 这里只保留禁用自动化特征，其他的一概不要
             launch_args = [
-                "--disable-blink-features=AutomationControlled" 
+                "--disable-blink-features=AutomationControlled"
             ]
             
             try:
@@ -100,15 +100,16 @@ class AutoLoginMonitorApp:
                     args=launch_args,
                     viewport={"width": 1920, "height": 1080},
                     ignore_https_errors=True,
-                    # 仅屏蔽"正受到自动测试软件控制"这一条提示
-                    ignore_default_args=["--enable-automation"] 
+                    # === 关键修改：显式忽略 --no-sandbox ===
+                    # 告诉 Playwright：不管是谁想加这个参数，都给我删掉！
+                    ignore_default_args=["--enable-automation", "--no-sandbox"] 
                 )
             except Exception as e:
                 self.log(f"❌ 启动失败: {e}")
                 self.log("💡 请务必关闭所有已打开的 Edge 窗口！")
                 return
 
-            # 注入 stealth 补丁 (这个是在内部运行的 JS，不会被浏览器启动参数检测到，很安全)
+            # 注入 stealth 补丁
             await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
 
             self.log(f">>> 开始处理 {len(lines)} 个账号...")
@@ -126,7 +127,6 @@ class AutoLoginMonitorApp:
                     acc = parts[1].strip()
                     pwd = parts[2].strip() if len(parts) > 2 else "NONE"
                     
-                    # 读取自定义按钮
                     custom_login_btn = parts[3].strip() if len(parts) > 3 else None
 
                     if not first_page_used:
@@ -176,13 +176,11 @@ class AutoLoginMonitorApp:
 
             await page.wait_for_timeout(random.randint(1500, 2500))
 
-            # 确定登录按钮
             if custom_btn_selector:
                 login_btn = page.locator(custom_btn_selector).first
             else:
                 login_btn = page.locator("button:has-text('登录'), button:has-text('Login'), input[value='登录'], a:has-text('登录'), div[role='button']:has-text('登录')").first
             
-            # 检查是否已登录
             if await login_btn.count() == 0 and password == "NONE":
                 self.log(f"[{account}] ✅ 未找到登录按钮，假设已登录")
                 return
@@ -209,12 +207,10 @@ class AutoLoginMonitorApp:
 
             try:
                 if await login_btn.count() > 0:
-                    # 高亮并点击
                     await login_btn.highlight()
                     await page.wait_for_timeout(1000) 
                     await login_btn.click(force=True)
                     self.log(f"[{account}] ✅ 点击动作已执行")
-                    
                     await page.wait_for_timeout(5000)
                 else:
                     self.log(f"[{account}] ⚠️ 找不到登录按钮，尝试回车")
